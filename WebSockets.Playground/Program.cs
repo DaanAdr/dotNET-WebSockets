@@ -1,44 +1,40 @@
-var builder = WebApplication.CreateBuilder(args);
+using System.Net;
+using System.Net.WebSockets;
+using System.Text;
+using System.Threading;
 
-// Add services to the container.
-// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+var builder = WebApplication.CreateBuilder(args);
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
+app.UseWebSockets();
 
-app.UseHttpsRedirection();
-
-var summaries = new[]
+// Only works for a single connected device
+app.Map("/ws", async (HttpContext context) =>
 {
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
+    if (context.WebSockets.IsWebSocketRequest)
+    {
+        using WebSocket webSocket = await context.WebSockets.AcceptWebSocketAsync();
 
-app.MapGet("/weatherforecast", () =>
-{
-    var forecast = Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast")
-.WithOpenApi();
+        var buffer = new byte[1024 * 4];
+        WebSocketReceiveResult result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+
+        while (!result.CloseStatus.HasValue)
+        {
+            string message = Encoding.UTF8.GetString(buffer, 0, result.Count);
+
+            byte[] response = Encoding.UTF8.GetBytes($"Echo: {message}");
+            await webSocket.SendAsync(new ArraySegment<byte>(response), result.MessageType, result.EndOfMessage, CancellationToken.None);
+
+            result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+        }
+
+        await webSocket.CloseAsync(result.CloseStatus.Value, result.CloseStatusDescription, CancellationToken.None);
+    }
+    else
+    {
+        context.Response.StatusCode = (int)HttpStatusCode.BadRequest;
+    }
+});
 
 app.Run();
-
-internal record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
-}
